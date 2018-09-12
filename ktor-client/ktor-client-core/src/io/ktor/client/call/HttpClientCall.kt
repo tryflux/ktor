@@ -18,14 +18,18 @@ class HttpClientCall internal constructor(
     /**
      * Represents the [request] sent by the client.
      */
-    lateinit var request: HttpRequest
-        internal set
+    lateinit var request: HttpRequest ; private set
 
     /**
      * Represents the [response] sent by the server.
      */
-    lateinit var response: HttpResponse
-        internal set
+    lateinit var response: HttpResponse ; private set
+
+    @Suppress("unused")
+    fun InternalHttpClientCall.setRequestInternal(req: HttpRequest) = run { request = req }
+
+    @Suppress("unused")
+    fun InternalHttpClientCall.setResponseInternal(res: HttpResponse) = run { response = res }
 
     /**
      * Tries to receive the payload of the [response] as an specific [expectedType].
@@ -55,6 +59,8 @@ class HttpClientCall internal constructor(
         response.close()
     }
 }
+
+object InternalHttpClientCall
 
 data class HttpEngineCall(val request: HttpRequest, val response: HttpResponse)
 

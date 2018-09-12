@@ -69,8 +69,10 @@ class HttpClient(
             validateHeaders(requestData)
 
             val (request, response) = engine.execute(call, requestData)
-            call.request = request
-            call.response = response
+            call.apply { InternalHttpClientCall.apply {
+                setRequestInternal(request)
+                setResponseInternal(response)
+            } }
 
             val receivedCall = receivePipeline.execute(call, call.response).call
             proceedWith(receivedCall)
