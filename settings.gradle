@@ -1,5 +1,4 @@
 rootProject.name = 'ktor'
-enableFeaturePreview('GRADLE_METADATA')
 
 def includeEx(String name) {
     include name
