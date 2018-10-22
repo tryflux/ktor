@@ -4,9 +4,16 @@ import io.ktor.server.engine.*
 import io.ktor.server.jetty.*
 import io.ktor.server.servlet.*
 import io.ktor.server.testing.*
+import kotlinx.atomicfu.*
+import org.eclipse.jetty.server.*
+import org.eclipse.jetty.server.handler.*
 import org.eclipse.jetty.servlet.*
 import org.junit.*
+import org.junit.Ignore
+import java.security.*
 import javax.servlet.*
+import javax.servlet.http.*
+import kotlin.test.*
 
 class JettyAsyncServletContainerEngineTest :
     EngineTestSuite<JettyApplicationEngineBase, JettyApplicationEngineBase.Configuration>(Servlet(async = true))
@@ -33,24 +40,94 @@ private class JettyServletApplicationEngine(
     async: Boolean
 ) : JettyApplicationEngineBase(environment, configure) {
     init {
-        server.handler = ServletContextHandler().apply {
+        val servletHandler = ServletContextHandler().apply {
             classLoader = environment.classLoader
             setAttribute(ServletApplicationEngine.ApplicationEngineEnvironmentAttributeKey, environment)
 
-            insertHandler(ServletHandler().apply {
-                val h = ServletHolder("ktor-servlet", ServletApplicationEngine::class.java).apply {
-                    isAsyncSupported = async
-                    registration.setLoadOnStartup(1)
-                    registration.setMultipartConfig(MultipartConfigElement(System.getProperty("java.io.tmpdir")))
-                    registration.setAsyncSupported(async)
-                }
+            insertHandler(
+                ServletHandler().apply {
+                    val h = ServletHolder("ktor-servlet", ServletApplicationEngine::class.java).apply {
+                        isAsyncSupported = async
+                        registration.setLoadOnStartup(1)
+                        registration.setMultipartConfig(MultipartConfigElement(System.getProperty("java.io.tmpdir")))
+                        registration.setAsyncSupported(async)
+                    }
 
-                addServlet(h)
-                addServletMapping(ServletMapping().apply {
-                    pathSpecs = arrayOf("*.", "/*")
-                    servletName = "ktor-servlet"
-                })
+                    addServlet(h)
+                    addServletMapping(ServletMapping().apply {
+                        pathSpecs = arrayOf("*.", "/*")
+                        servletName = "ktor-servlet"
+                    })
             })
+        }
+
+        server.handler = JavaSecurityHandler().apply {
+            handler = servletHandler
         }
     }
 }
+
+private class JavaSecurityHandler : HandlerWrapper() {
+    override fun handle(
+        target: String?,
+        baseRequest: Request?,
+        request: HttpServletRequest?,
+        response: HttpServletResponse?
+    ) {
+        val oldSecurityManager: SecurityManager? = System.getSecurityManager()
+        val securityManager = SpecializedSecurityManager(oldSecurityManager)
+        System.setSecurityManager(securityManager)
+        try {
+            super.handle(target, baseRequest, request, response)
+        } finally {
+            securityManager.allowSwitchToSecurityManager(oldSecurityManager)
+            System.setSecurityManager(oldSecurityManager)
+        }
+    }
+}
+
+private class SpecializedSecurityManager(val delegate: SecurityManager?) : SecurityManager() {
+    private val allowSwitchBackTo: AtomicRef<SecurityManager?> = atomic(this)
+
+    fun allowSwitchToSecurityManager(manager: SecurityManager?) {
+        allowSwitchBackTo.update {
+            if (it !== this) throw SecurityException("Could be allowed only once")
+            manager
+        }
+    }
+
+    override fun checkPermission(perm: Permission?) {
+        if (perm is RuntimePermission && perm.name == "modifyThreadGroup") {
+            if (currentStackTrace().any { it.className == "org.eclipse.jetty.util.thread.QueuedThreadPool" &&
+                it.methodName == "newThread" }) return // allow
+
+            throw SecurityException("Thread modifications are not allowed")
+        }
+        if (perm is RuntimePermission && perm.name == "setSecurityManager") {
+            if (allowSwitchBackTo.value === this) {
+                throw SecurityException("SecurityManager change is not allowed")
+            }
+            return
+        }
+
+        delegate?.checkPermission(perm)
+    }
+
+    private var rootGroup: ThreadGroup? = null
+
+    override fun getThreadGroup(): ThreadGroup? {
+        if (rootGroup == null) {
+            rootGroup = findRootGroup()
+        }
+        return rootGroup
+    }
+
+    private fun findRootGroup(): ThreadGroup {
+        var root = Thread.currentThread().threadGroup
+        while (root.parent != null) {
+            root = root.parent
+        }
+        return root
+    }
+}
+
