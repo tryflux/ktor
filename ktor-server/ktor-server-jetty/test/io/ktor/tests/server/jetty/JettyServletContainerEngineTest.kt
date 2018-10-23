@@ -8,7 +8,6 @@ import kotlinx.atomicfu.*
 import org.eclipse.jetty.server.*
 import org.eclipse.jetty.server.handler.*
 import org.eclipse.jetty.servlet.*
-import org.junit.*
 import org.junit.Ignore
 import java.security.*
 import javax.servlet.*
@@ -61,8 +60,12 @@ private class JettyServletApplicationEngine(
             })
         }
 
-        server.handler = JavaSecurityHandler().apply {
-            handler = servletHandler
+        if (async) {
+            server.handler = servletHandler
+        } else {
+            server.handler = JavaSecurityHandler().apply {
+                handler = servletHandler
+            }
         }
     }
 }
@@ -75,7 +78,7 @@ private class JavaSecurityHandler : HandlerWrapper() {
         response: HttpServletResponse?
     ) {
         val oldSecurityManager: SecurityManager? = System.getSecurityManager()
-        val securityManager = SpecializedSecurityManager(oldSecurityManager)
+        val securityManager = RestrictThreadCreationSecurityManager(oldSecurityManager)
         System.setSecurityManager(securityManager)
         try {
             super.handle(target, baseRequest, request, response)
@@ -86,13 +89,12 @@ private class JavaSecurityHandler : HandlerWrapper() {
     }
 }
 
-private class SpecializedSecurityManager(val delegate: SecurityManager?) : SecurityManager() {
-    private val allowSwitchBackTo: AtomicRef<SecurityManager?> = atomic(this)
+private class RestrictThreadCreationSecurityManager(val delegate: SecurityManager?) : SecurityManager() {
+    private val allowSwitchBack = atomic(false)
 
     fun allowSwitchToSecurityManager(manager: SecurityManager?) {
-        allowSwitchBackTo.update {
-            if (it !== this) throw SecurityException("Could be allowed only once")
-            manager
+        if (!allowSwitchBack.compareAndSet(false, true)) {
+            throw SecurityException("Could be allowed only once")
         }
     }
 
@@ -104,7 +106,7 @@ private class SpecializedSecurityManager(val delegate: SecurityManager?) : Secur
             throw SecurityException("Thread modifications are not allowed")
         }
         if (perm is RuntimePermission && perm.name == "setSecurityManager") {
-            if (allowSwitchBackTo.value === this) {
+            if (!allowSwitchBack.value) {
                 throw SecurityException("SecurityManager change is not allowed")
             }
             return
