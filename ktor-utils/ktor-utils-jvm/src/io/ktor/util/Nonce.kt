@@ -55,7 +55,7 @@ private val nonceGeneratorJob =
                 val currentTime = System.currentTimeMillis()
 
                 if (currentTime - lastReseed > SECURE_RESEED_PERIOD) {
-                    secureInstance.setSeed(lastReseed - currentTime)
+                    weakRandom.setSeed(lastReseed - currentTime)
                     weakRandom.setSeed(secureInstance.generateSeed(secureBytes.size))
                     lastReseed = currentTime
                 } else {
